@@ -72,7 +72,6 @@ Using UMPIRE framework (adapted):
 **Match:** [What similar patterns/solutions exist in the codebase?]
 
 **Plan:** [Step-by-step implementation plan]
-
 1. [Modify file X to do Y]
 2. [Add function Z]
 3. [Update tests]
@@ -129,7 +128,6 @@ Using UMPIRE framework (adapted):
 **PR Description:** [Draft or final PR description - much of the content above can be adapted]
 
 **Maintainer Feedback:**
-
 - [Date]: [Summary of feedback received]
 - [Date]: [How you addressed it]
 
