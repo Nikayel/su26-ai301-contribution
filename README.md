@@ -1,15 +1,44 @@
-# Contribution [#]: [Issue Title]
+# Contribution 1: [Security] XSS — concurrencyError.jsp renders clinical note in `<textarea>` without encoding
 
-**Contribution Number:** [1 / 2 / 3]  
-**Student:** [Your Name]  
-**Issue:** [GitHub issue link]  
-**Status:** [Phase I / Phase II / Phase III / Phase IV] [In Progress / Complete]
+**Contribution Number:** 1  
+**Student:** Nikayel Jamal  
+**Issue:** https://github.com/carlos-emr/carlos/issues/2319  
+**Status:** Phase I Complete
 
 ---
 
 ## Why I Chose This Issue
 
-[1-2 paragraphs explaining why this issue interests you, how it matches your skills/learning goals, what you hope to learn]
+I chose issue #2319, an XSS (cross-site scripting) vulnerability in the carlos
+project, because it aligns with my interest in web security and has a clear,
+bounded scope. The issue is labeled "good first issue," "help wanted," and
+"Security," and rates the review effort as 2/5 — signals that it's an
+appropriate first contribution. It is currently unassigned with no linked pull
+requests, so it's available to claim.
+
+I'm interested in this because:
+
+1. The vulnerability is concrete and easy to understand: a clinical note is
+   rendered directly into a `<textarea>` without HTML encoding, so a note
+   containing a `</textarea>` tag can break out of the element and inject
+   arbitrary HTML or scripts.
+2. The fix is well-scoped — it centers on a single file and line — which makes
+   it realistic to complete within the 3–4 week cycle.
+3. The issue even points to a related fix (#2302 in `billingSettings.jsp`) and
+   suggests the project's own `carlos:encode` taglib as the solution, giving me
+   a clear pattern to follow and learn from.
+4. I want to learn how a real Java/JSP web application handles output encoding
+   and defends against stored XSS, and how this project structures its security
+   fixes.
+
+From reading the issue, I understand the problem is that untrusted clinical-note
+content is output without encoding, allowing tag injection. My contribution will
+HTML-encode that content so the note is displayed safely as text rather than
+interpreted as markup, improving the application's security.
+
+> _Note: This is in Java/JSP, which I'll be ramping up on with Claude Code during
+> Phase II. The fix follows an established pattern in the codebase, which makes the
+> language gap manageable._
 
 ---
 
@@ -17,19 +46,32 @@
 
 ### Problem Description
 
-[In your own words, what's broken or missing?]
+The `concurrencyError.jsp` page renders a clinical note (`bean.encounter`)
+directly into a `<textarea>` element without HTML-encoding it first. Because the
+content is untrusted (it can come from data stored in the database), a note that
+contains a `</textarea>` sequence can prematurely close the textarea and inject
+arbitrary HTML — a stored cross-site scripting (XSS) vulnerability.
 
 ### Expected Behavior
 
-[What should happen?]
+The clinical-note content should be HTML-encoded before being inserted into the
+`<textarea>`, so that characters like `<` and `>` are displayed as text rather
+than interpreted as markup. No injected tags or scripts should execute when the
+concurrency-error page loads.
 
 ### Current Behavior
 
-[What actually happens?]
+Line 62 outputs the value unencoded:
+`<textarea><%= bean.encounter %></textarea>`. A stored note such as
+`</textarea><img src=x onerror=alert(1)>` breaks out of the textarea and executes
+script in the user's browser when the page is rendered.
 
 ### Affected Components
 
-[Which parts of the codebase are involved?]
+- **File:** `src/main/webapp/WEB-INF/jsp/encounter/concurrencyError.jsp` (line 62)
+- **Related fix for reference:** #2302, a similar XSS fix in `billingSettings.jsp`
+- **Suggested mechanism:** the project's own taglib —
+  `<carlos:encode value='<%= bean.encounter %>' context="html"/>`
 
 ---
 
@@ -72,6 +114,7 @@ Using UMPIRE framework (adapted):
 **Match:** [What similar patterns/solutions exist in the codebase?]
 
 **Plan:** [Step-by-step implementation plan]
+
 1. [Modify file X to do Y]
 2. [Add function Z]
 3. [Update tests]
@@ -128,6 +171,7 @@ Using UMPIRE framework (adapted):
 **PR Description:** [Draft or final PR description - much of the content above can be adapted]
 
 **Maintainer Feedback:**
+
 - [Date]: [Summary of feedback received]
 - [Date]: [How you addressed it]
 
