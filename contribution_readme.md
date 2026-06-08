@@ -3,7 +3,7 @@
 **Contribution Number:** 1  
 **Student:** Nikayel Jamal  
 **Issue:** https://github.com/carlos-emr/carlos/issues/2319  
-**Status:** Phase I Complete
+**Status:** Phase II Complete
 
 ---
 
@@ -78,19 +78,59 @@ script in the user's browser when the page is rendered.
 
 ### Environment Setup
 
-[Notes on setting up your local development environment - challenges you faced, how you solved them]
+Because the full OSCAR EMR stack requires MySQL + Tomcat + a built WAR, I reproduced
+the vulnerability using an isolated JSP on a standalone Tomcat 10.1.25. This approach
+targets the exact vulnerable line in isolation and is sufficient to demonstrate the
+broken-textarea payload executing in a browser.
+
+**Tools used:** Java 23 (pre-installed), Apache Tomcat 10.1.25 (downloaded tarball),
+`curl` for automated payload delivery.
+
+**Setup steps:**
+1. Downloaded `apache-tomcat-10.1.25.tar.gz` from the Apache archives and extracted
+   it to `/tmp/xss-repro/`.
+2. Created a one-file JSP webapp (`xss-demo/vulnerable.jsp`) that replicates the
+   exact pattern from `concurrencyError.jsp` line 62:
+   ```jsp
+   <textarea name="encounterTextarea" wrap="hard" cols="99" rows="20"><%=encounterNote%></textarea>
+   ```
+   where `encounterNote` simulates `bean.encounter` (an attacker-controlled string
+   from the database).
+3. Started Tomcat (`bin/startup.sh`) and verified the normal case renders correctly.
 
 ### Steps to Reproduce
 
-1. [Step 1]
-2. [Step 2]
-3. [Observed result]
+1. Deploy the vulnerable JSP to a Tomcat instance (as described in Environment Setup).
+2. Visit the page with a benign note:
+   ```
+   http://localhost:8080/xss-demo/vulnerable.jsp
+   ```
+   Observe a normal textarea containing the default clinical note text — no issues.
+3. Send the XSS payload as the `note` parameter (simulating a stored note retrieved
+   from the database):
+   ```
+   http://localhost:8080/xss-demo/vulnerable.jsp?note=%3C%2Ftextarea%3E%3Cimg+src%3Dx+onerror%3Dalert(document.cookie)%3E%3Ctextarea%3E
+   ```
+   (URL-decoded payload: `</textarea><img src=x onerror=alert(document.cookie)><textarea>`)
+4. **Observed result:** The textarea element is prematurely closed by `</textarea>`.
+   The `<img>` tag is rendered as raw HTML outside the form element. In a browser,
+   the `onerror` handler fires immediately, executing `alert(document.cookie)`. The
+   raw HTML in the server response confirms the breakout:
+   ```html
+   <textarea name="encounterTextarea" ...></textarea><img src=x onerror=alert(document.cookie)><textarea></textarea>
+   ```
 
 ### Reproduction Evidence
 
-- **Commit showing reproduction:** [Link to commit in your fork]
-- **Screenshots/logs:** [If applicable]
-- **My findings:** [What you discovered during reproduction]
+- **Branch:** https://github.com/Nikayel/su26-ai301-contribution/tree/main
+- **My findings:** The `curl` response directly shows the textarea being closed early
+  and the `<img>` tag emitted as free HTML. The OWASP classification is **Stored XSS**
+  because in the real application `bean.encounter` is read from the database — a
+  malicious note saved by any user with encounter-write access would activate on every
+  clinician who hits the concurrency-error page while editing that record.
+  The same `carlos:encode` taglib that fixed `billingSettings.jsp` in issue #2302 is
+  the correct remedy here: it HTML-encodes `<`, `>`, `&`, `"` so the note content is
+  displayed as text, never interpreted as markup.
 
 ---
 
@@ -98,30 +138,72 @@ script in the user's browser when the page is rendered.
 
 ### Analysis
 
-[Your analysis of the root cause - what's causing the issue?]
+The root cause is missing output encoding at the JSP template layer. JSP's `<%= expr %>`
+emits the raw string value of the expression — it performs no escaping. When `bean.encounter`
+contains `</textarea>`, the browser's HTML parser sees a valid closing tag and ends the
+textarea element, interpreting everything that follows as regular page markup. This is a
+classic **stored XSS via untrusted data in an HTML element context** (OWASP A03:2021).
+
+The vulnerability has been in the file since at least the initial commit. The concurrency
+error page is uncommon but reachable in any busy clinic where two users open the same
+encounter simultaneously — making it a realistic attack surface.
 
 ### Proposed Solution
 
-[High-level description of your fix approach]
+Add the `carlos` taglib declaration to `concurrencyError.jsp` and replace the raw `<%= %>`
+with `<carlos:encode ... context="html"/>`. This is exactly the fix pattern used in
+`billingSettings.jsp` (PR #2302) and is the project's established standard for HTML-context
+output encoding.
+
+The `carlos:encode` tag HTML-encodes the five sensitive characters (`<`, `>`, `&`, `"`, `'`)
+so that `</textarea>` becomes `&lt;/textarea&gt;`, which the browser renders as visible text
+inside the textarea rather than as a closing HTML tag.
 
 ### Implementation Plan
 
-Using UMPIRE framework (adapted):
+Using UMPIRE framework:
 
-**Understand:** [Restate the problem]
+**Understand:** `concurrencyError.jsp` line 62 outputs `bean.encounter` (a DB-sourced
+clinical note string) directly into a `<textarea>` with no HTML encoding. A note containing
+`</textarea>` closes the element and injects arbitrary HTML/JS into the page.
 
-**Match:** [What similar patterns/solutions exist in the codebase?]
+**Match:** The codebase already has the solution: `billingSettings.jsp` was fixed identically
+in issue #2302. That fix added `<%@ taglib uri="carlos" prefix="carlos" %>` at the top of
+the file and replaced raw `<%= %>` outputs with `<carlos:encode value='...' context="html"/>`.
 
-**Plan:** [Step-by-step implementation plan]
-1. [Modify file X to do Y]
-2. [Add function Z]
-3. [Update tests]
+**Plan:**
+1. Open `src/main/webapp/WEB-INF/jsp/encounter/concurrencyError.jsp` in the fork.
+2. Add the taglib declaration near the other existing taglib declarations (after line ~33):
+   ```jsp
+   <%@ taglib uri="carlos" prefix="carlos" %>
+   ```
+3. Replace line 62:
+   ```jsp
+   <%-- BEFORE (vulnerable) --%>
+   <textarea name='encounterTextarea' wrap="hard" cols="99" rows="20"><%=bean.encounter%></textarea>
 
-**Implement:** [Link to your branch/commits as you work]
+   <%-- AFTER (fixed) --%>
+   <textarea name='encounterTextarea' wrap="hard" cols="99" rows="20"><carlos:encode value='<%= bean.encounter %>' context="html"/></textarea>
+   ```
+4. Run `mvn -B -Pjspc package -DskipTests` (the maintainer-suggested verification command)
+   to confirm the JSP compiles without errors.
+5. Manually verify: deploy locally, insert a synthetic note containing
+   `</textarea><img src=x onerror=alert(1)>`, trigger the concurrency-error page, and
+   confirm the payload appears as escaped text inside the textarea rather than executing.
 
-**Review:** [Self-review checklist - does it follow the project's contribution guidelines?]
+**Implement:** Link to branch/commits will be added here as work proceeds.
 
-**Evaluate:** [How will you verify it works?]
+**Review checklist:**
+- [ ] Only `concurrencyError.jsp` is modified — no changes to encounter save logic,
+      session handling, or Struts actions (per maintainer guidance)
+- [ ] Taglib URI matches the project's existing pattern (same `uri="carlos"` used elsewhere)
+- [ ] `context="html"` is correct for textarea body content (vs. `htmlAttribute` for attributes)
+- [ ] JSP compiles via `mvn -B -Pjspc package -DskipTests`
+- [ ] Test data uses synthetic names (e.g., "Fake-name Fake-surname")
+
+**Evaluate:** After the fix, the same XSS payload (`</textarea><img src=x onerror=alert(document.cookie)>`)
+stored as a clinical note must render as escaped text (`&lt;/textarea&gt;...`) inside the
+textarea, with no JavaScript executing and the textarea element remaining intact.
 
 ---
 
